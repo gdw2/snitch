@@ -1,42 +1,37 @@
-(ns snitch.core
-  (:refer-clojure :exclude [#?(:cljs macroexpand)])
+(ns snitch
+  ;; (:refer-clojure :exclude [#?(:cljs macroexpand)])
   (:require
-    [clojure.string :as s]
-    [snitch.analyzer :as ana])
-  #?(:cljs
-     (:require-macros
-       [snitch.core])))
+   [clojure.walk :refer [walk prewalk postwalk macroexpand-all]]
+   [clojure.string :as s]
+   #_[snitch.analyzer :as ana]))
 
+;; (defn walk
+;;   "Like `clojure.walk/walk`, but preserves metadata."
+;;   [inner outer form]
+;;   (let [x (cond
+;;             (list? form) (outer (with-meta (apply list (map inner form))
+;;                                   (meta form)))
+;;             (instance? clojure.lang.IMapEntry form) (outer (vec (map inner form)))
+;;             (seq? form) (outer (with-meta (doall (map inner form))
+;;                                  (meta form)))
+;;             (instance? clojure.lang.IRecord form)
+;;             (outer (reduce (fn [r x] (conj r (inner x))) form form))
+;;             (coll? form) (outer (into (empty form) (map inner form)))
+;;             :else (outer form))]
+;;     (if (instance? clojure.lang.IObj x)
+;;       (with-meta x (merge (meta form) (meta x)))
+;;       x)))
 
-(defn walk
-  "Like `clojure.walk/walk`, but preserves metadata."
-  [inner outer form]
-  (let [x (cond
-            (list? form) (outer (with-meta (apply list (map inner form))
-                                  (meta form)))
-            (instance? clojure.lang.IMapEntry form) (outer (vec (map inner form)))
-            (seq? form) (outer (with-meta (doall (map inner form))
-                                 (meta form)))
-            (instance? clojure.lang.IRecord form)
-            (outer (reduce (fn [r x] (conj r (inner x))) form form))
-            (coll? form) (outer (into (empty form) (map inner form)))
-            :else (outer form))]
-    (if (instance? clojure.lang.IObj x)
-      (with-meta x (merge (meta form) (meta x)))
-      x)))
-
-
-(defn postwalk
-  "Like `clojure.walk/postwalk`, but preserves metadata."
-  [f form]
-  (walk (partial postwalk f) f form))
-
-
-(defn prewalk
-  "Like `clojure.walk/prewalk`, but preserves metadata."
-  [f form]
-  (walk (partial prewalk f) identity (f form)))
-
+;; (defn postwalk
+;;   "Like `clojure.walk/postwalk`, but preserves metadata."
+;;   [f form]
+;;   (walk (partial postwalk f) f form))
+;;
+;;
+;; (defn prewalk
+;;   "Like `clojure.walk/prewalk`, but preserves metadata."
+;;   [f form]
+;;   (walk (partial prewalk f) identity (f form)))
 
 (defn ->simple-symbol
   [sym]
@@ -46,7 +41,6 @@
           (s/split #"/")
           last
           symbol)))
-
 
 (defn keyword-ns
   "naive function to get the ns part of a namespaced keyword"
@@ -58,55 +52,51 @@
       (s/replace #":" "")
       symbol))
 
-
 (defn concat-symbols
   [& symbols]
   (symbol (apply str symbols)))
 
-
 (defn let-form?
   [form]
   (boolean
-    (when (seq? form)
-      (some #{(first form)}
-            ['let
-             'let*
-             'clojure.core/let]))))
+   (when (seq? form)
+     (some #{(first form)}
+           ['let
+            'let*
+            'P/let
+            'clojure.core/let]))))
 
+;; (defn with-meta*
+;;   "Like with-meta, but doesn't throw an exception if `x` is not an object."
+;;   [x m]
+;;   (if (instance? clojure.lang.IObj x)
+;;     (with-meta x m)
+;;     x))
 
-(defn with-meta*
-  "Like with-meta, but doesn't throw an exception if `x` is not an object."
-  [x m]
-  (if (instance? clojure.lang.IObj x)
-    (with-meta x m)
-    x))
-
-
-#?(:clj (defn macroexpand*
-          "Like macroexpand but works with cljs."
-          [env form]
-          (if (contains? env :js-globals)
-            ;; cljs
-            (loop [form form
-                   form* (with-meta* (ana/macroexpand-1 env form)
-                           (meta form))]
-              (if-not (identical? form form*)
-                (recur form* (ana/macroexpand-1 env form*))
-                form*))
-            ;; clj
-            (with-meta* (macroexpand form)
-              (meta form)))))
-
-
-#?(:clj (defn macroexpand-all
-          "Like clojure.walk/macroexpand-all but works with cljs."
-          [env form]
-          (prewalk (fn [x]
-                     (if (seq? x)
-                       (macroexpand* env x)
-                       x))
-                   form)))
-
+;; #?(:clj (defn macroexpand*
+;;           "Like macroexpand but works with cljs."
+;;           [env form]
+;;           (if (contains? env :js-globals)
+;;             ;; cljs
+;;             (loop [form form
+;;                    form* (with-meta* (ana/macroexpand-1 env form)
+;;                            (meta form))]
+;;               (if-not (identical? form form*)
+;;                 (recur form* (ana/macroexpand-1 env form*))
+;;                 form*))
+;;             ;; clj
+;;             (with-meta* (macroexpand form)
+;;               (meta form)))))
+;;
+;;
+;; #?(:clj (defn macroexpand-all
+;;           "Like clojure.walk/macroexpand-all but works with cljs."
+;;           [env form]
+;;           (prewalk (fn [x]
+;;                      (if (seq? x)
+;;                        (macroexpand* env x)
+;;                        x))
+;;                    form)))
 
 (defn arg->def-args
   ([arg]
@@ -114,115 +104,113 @@
      `(def ~arg ~arg)
      arg)))
 
-
-(defn cc-destructure
-  "A slightly modified version of clj and cljs' destructure to 
-  work with clj and cljs."
-  [bindings]
-  (let [bents (partition 2 bindings)
-        pb (fn pb
-             [bvec b v]
-             (let [pvec
-                   (fn [bvec b val]
-                     (let [gvec (gensym "vec__")
-                           gseq (gensym "seq__")
-                           gfirst (gensym "first__")
-                           has-rest (some #{'&} b)]
-                       (loop [ret (let [ret (conj bvec gvec val)]
-                                    (if has-rest
-                                      (conj ret gseq (list `seq gvec))
-                                      ret))
-                              n 0
-                              bs b
-                              seen-rest? false]
-                         (if (seq bs)
-                           (let [firstb (first bs)]
-                             (cond
-                               (= firstb '&) (recur (pb ret (second bs) gseq)
-                                                    n
-                                                    (nnext bs)
-                                                    true)
-                               (= firstb :as) (pb ret (second bs) gvec)
-                               :else (if seen-rest?
-                                       (throw #?(:clj (new Exception "Unsupported binding form, only :as can follow & parameter")
-                                                 :cljs (new js/Error "Unsupported binding form, only :as can follow & parameter")))
-                                       (recur (pb (if has-rest
-                                                    (conj ret
-                                                          gfirst `(~'first ~gseq)
-                                                          gseq `(~'next ~gseq))
-                                                    ret)
-                                                  firstb
-                                                  (if has-rest
-                                                    gfirst
-                                                    (list `~'nth gvec n nil)))
-                                              (inc n)
-                                              (next bs)
-                                              seen-rest?))))
-                           ret))))
-                   pmap
-                   (fn [bvec b v]
-                     (let [gmap (gensym "map__")
-                           gmapseq (with-meta gmap {:tag 'clojure.lang.ISeq})
-                           defaults (:or b)]
-                       (loop [ret (-> bvec (conj gmap) (conj v)
-                                      (conj gmap) (conj `(~'if (~'seq? ~gmap)
-                                                               (~'apply ~'hash-map (~'seq ~gmapseq))
-                                                               ~gmap))
-                                      ((fn [ret]
-                                         (if (:as b)
-                                           (conj ret (:as b) gmap)
-                                           ret))))
-                              bes (let [transforms
-                                        (reduce
-                                          (fn [transforms mk]
-                                            (if (keyword? mk)
-                                              (let [mkns (namespace mk)
-                                                    mkn (name mk)]
-                                                (cond (= mkn "keys") (assoc transforms mk #(keyword (or mkns (namespace %)) (name %)))
-                                                      (= mkn "syms") (assoc transforms mk #(list `quote (symbol (or mkns (namespace %)) (name %))))
-                                                      (= mkn "strs") (assoc transforms mk str)
-                                                      :else transforms))
-                                              transforms))
-                                          {}
-                                          (keys b))]
-                                    (reduce
-                                      (fn [bes entry]
-                                        (reduce #(assoc %1 %2 ((val entry) %2))
-                                                (dissoc bes (key entry))
-                                                ((key entry) bes)))
-                                      (dissoc b :as :or)
-                                      transforms))]
-                         (if (seq bes)
-                           (let [bb (key (first bes))
-                                 bk (val (first bes))
-                                 local (if #?(:clj  (instance? clojure.lang.Named bb)
-                                              :cljs (implements? INamed bb))
-                                         (with-meta (symbol nil (name bb)) (meta bb))
-                                         bb)
-                                 bv (if (contains? defaults local)
-                                      (list 'get gmap bk (defaults local))
-                                      (list 'get gmap bk))]
-                             (recur (if (ident? bb)
-                                      (-> ret (conj local bv))
-                                      (pb ret bb bv))
-                                    (next bes)))
-                           ret))))]
-               (cond
-                 (symbol? b) (-> bvec (conj b) (conj v))
-                 (vector? b) (pvec bvec b v)
-                 (map? b) (pmap bvec b v)
-                 :else (throw
-                         #?(:clj (new Exception (str "Unsupported binding form: " b))
-                            :cljs (new js/Error (str "Unsupported binding form: " b)))))))
-        process-entry (fn [bvec b] (pb bvec (first b) (second b)))]
-    (if (every? symbol? (map first bents))
-      bindings
-      (if-let [kwbs (seq (filter #(keyword? (first %)) bents))]
-        (throw
-          #?(:clj (new Exception (str "Unsupported binding key: " (ffirst kwbs)))
-             :cljs (new js/Error (str "Unsupported binding key: " (ffirst kwbs)))))
-        (reduce process-entry [] bents)))))
-
+;; (defn cc-destructure
+;;   "A slightly modified version of clj and cljs' destructure to
+;;   work with clj and cljs."
+;;   [bindings]
+;;   (let [bents (partition 2 bindings)
+;;         pb (fn pb
+;;              [bvec b v]
+;;              (let [pvec
+;;                    (fn [bvec b val]
+;;                      (let [gvec (gensym "vec__")
+;;                            gseq (gensym "seq__")
+;;                            gfirst (gensym "first__")
+;;                            has-rest (some #{'&} b)]
+;;                        (loop [ret (let [ret (conj bvec gvec val)]
+;;                                     (if has-rest
+;;                                       (conj ret gseq (list `seq gvec))
+;;                                       ret))
+;;                               n 0
+;;                               bs b
+;;                               seen-rest? false]
+;;                          (if (seq bs)
+;;                            (let [firstb (first bs)]
+;;                              (cond
+;;                                (= firstb '&) (recur (pb ret (second bs) gseq)
+;;                                                     n
+;;                                                     (nnext bs)
+;;                                                     true)
+;;                                (= firstb :as) (pb ret (second bs) gvec)
+;;                                :else (if seen-rest?
+;;                                        (throw #?(:clj (new Exception "Unsupported binding form, only :as can follow & parameter")
+;;                                                  :cljs (new js/Error "Unsupported binding form, only :as can follow & parameter")))
+;;                                        (recur (pb (if has-rest
+;;                                                     (conj ret
+;;                                                           gfirst `(~'first ~gseq)
+;;                                                           gseq `(~'next ~gseq))
+;;                                                     ret)
+;;                                                   firstb
+;;                                                   (if has-rest
+;;                                                     gfirst
+;;                                                     (list `~'nth gvec n nil)))
+;;                                               (inc n)
+;;                                               (next bs)
+;;                                               seen-rest?))))
+;;                            ret))))
+;;                    pmap
+;;                    (fn [bvec b v]
+;;                      (let [gmap (gensym "map__")
+;;                            gmapseq (with-meta gmap {:tag 'clojure.lang.ISeq})
+;;                            defaults (:or b)]
+;;                        (loop [ret (-> bvec (conj gmap) (conj v)
+;;                                       (conj gmap) (conj `(~'if (~'seq? ~gmap)
+;;                                                                (~'apply ~'hash-map (~'seq ~gmapseq))
+;;                                                                ~gmap))
+;;                                       ((fn [ret]
+;;                                          (if (:as b)
+;;                                            (conj ret (:as b) gmap)
+;;                                            ret))))
+;;                               bes (let [transforms
+;;                                         (reduce
+;;                                           (fn [transforms mk]
+;;                                             (if (keyword? mk)
+;;                                               (let [mkns (namespace mk)
+;;                                                     mkn (name mk)]
+;;                                                 (cond (= mkn "keys") (assoc transforms mk #(keyword (or mkns (namespace %)) (name %)))
+;;                                                       (= mkn "syms") (assoc transforms mk #(list `quote (symbol (or mkns (namespace %)) (name %))))
+;;                                                       (= mkn "strs") (assoc transforms mk str)
+;;                                                       :else transforms))
+;;                                               transforms))
+;;                                           {}
+;;                                           (keys b))]
+;;                                     (reduce
+;;                                       (fn [bes entry]
+;;                                         (reduce #(assoc %1 %2 ((val entry) %2))
+;;                                                 (dissoc bes (key entry))
+;;                                                 ((key entry) bes)))
+;;                                       (dissoc b :as :or)
+;;                                       transforms))]
+;;                          (if (seq bes)
+;;                            (let [bb (key (first bes))
+;;                                  bk (val (first bes))
+;;                                  local (if #?(:clj  (instance? clojure.lang.Named bb)
+;;                                               :cljs (implements? INamed bb))
+;;                                          (with-meta (symbol nil (name bb)) (meta bb))
+;;                                          bb)
+;;                                  bv (if (contains? defaults local)
+;;                                       (list 'get gmap bk (defaults local))
+;;                                       (list 'get gmap bk))]
+;;                              (recur (if (ident? bb)
+;;                                       (-> ret (conj local bv))
+;;                                       (pb ret bb bv))
+;;                                     (next bes)))
+;;                            ret))))]
+;;                (cond
+;;                  (symbol? b) (-> bvec (conj b) (conj v))
+;;                  (vector? b) (pvec bvec b v)
+;;                  (map? b) (pmap bvec b v)
+;;                  :else (throw
+;;                          #?(:clj (new Exception (str "Unsupported binding form: " b))
+;;                             :cljs (new js/Error (str "Unsupported binding form: " b)))))))
+;;         process-entry (fn [bvec b] (pb bvec (first b) (second b)))]
+;;     (if (every? symbol? (map first bents))
+;;       bindings
+;;       (if-let [kwbs (seq (filter #(keyword? (first %)) bents))]
+;;         (throw
+;;           #?(:clj (new Exception (str "Unsupported binding key: " (ffirst kwbs)))
+;;              :cljs (new js/Error (str "Unsupported binding key: " (ffirst kwbs)))))
+;;         (reduce process-entry [] bents)))))
 
 (defn define-args
   ([args]
@@ -233,19 +221,17 @@
            ()
            args)))
 
-
 (defn autogensym?
   "Returns true if symbol is an autogensym or gensym symbol"
   [x]
   (boolean (or (re-matches #".*__\d.*__auto__" (str x))
                (re-matches #".*__\d*" (str x)))))
 
-
 (defn insert-into-let
   ([bindings]
    (reduce (fn [acc [var* value]]
-             ;; if the var is introduced by 
-             ;; clojure's destructuring it makes 
+             ;; if the var is introduced by
+             ;; clojure's destructuring it makes
              ;; no sense to globally define it, since no one
              ;; will know about it, and its wasteful.
              (if (autogensym? var*)
@@ -256,14 +242,12 @@
            []
            (partition 2 bindings))))
 
-
 (defn defined-let-binding?
   [form]
   (true? (:snitch.core/defined-let-binding (meta form))))
 
-
 (defn define-let-bindings
-  "injects inline defs inside let bindings, and adds metadata indicating 
+  "injects inline defs inside let bindings, and adds metadata indicating
   that the form contains inline defs.
   This is to prevent let forms from repeatedly being passed to `insert-into-let`.
   "
@@ -277,16 +261,15 @@
      (let-form? body)
      (let [[l* bindings & inner-body] body
            inner-body* (define-let-bindings inner-body)]
-       (with-meta* `(~l* ~(insert-into-let (cc-destructure bindings))
-                         ~@inner-body*)
+       (with-meta `(~l* ~(insert-into-let (destructure bindings))
+                        ~@inner-body*)
 
          (merge {:snitch.core/defined-let-binding true}
-                (when (when (instance? clojure.lang.IObj body)
-                        (meta body)) (meta body)))))
+                (when (when true #_(instance? clojure.lang.IObj body)
+                            (meta body)) (meta body)))))
 
      :else
      (map define-let-bindings body))))
-
 
 (defn maybe-destructured
   "Taken from clojure core.
@@ -307,16 +290,15 @@
           (~'let ~lets
                  ~@body))))))
 
-
 ;; find better name
 (defn namespaced-destructuring
   "namespaced maps can be destructured in two ways.
   [{:keys [a/b]}] #:a{:b 1}
-  or 
+  or
   [{:a/keys [b]}] #:a{:b 1}
 
-  This function handles the 2nd case. 
-  Converts the 2nd case to the first case 
+  This function handles the 2nd case.
+  Converts the 2nd case to the first case
   "
   [k v]
   (let [v* (mapv (fn [sym]
@@ -324,17 +306,15 @@
                  v)]
     v*))
 
-
 (def preserve-symbol?
   "Certain values will get printed in a way that's not readable.
-  for e.g functions when evaluated return function Objects 
-  like this - 
-  identity 
+  for e.g functions when evaluated return function Objects
+  like this -
+  identity
   ;=> #function[clojure.core/identity]
   These can't be evaluated, so we preserve the symbol as it is.
   "
   (some-fn fn?))
-
 
 ;; find better name
 (defn values->hashmap
@@ -348,7 +328,6 @@
                                 ~x*)]))
                         v))))
 
-
 (defn construct-map
   [m]
   (if (contains? m :as)
@@ -360,9 +339,9 @@
 
                    ;; if using other destructuring syntax
                    ;; like [{:ns/keys [a b]}]
-                   (and (instance? clojure.lang.Named k)
-                        (= (keyword (name k)) :keys)
-                        (not (= k :keys)))
+                   (and #_(instance? clojure.lang.Named k)
+                    (= (keyword (name k)) :keys
+                       (not (= k :keys))))
                    (values->hashmap acc (namespaced-destructuring k v))
 
                    (#{:as :or} k)
@@ -376,7 +355,6 @@
                {}
                m)))
 
-
 (defn restructure
   "Opposite of destructure. required for reconstructing a map.
   vectors can have maps inside them."
@@ -389,14 +367,13 @@
                              keyword-args? (not (symbol? tail))]
                          (if keyword-args?
                            acc
-                           (reduced (conj acc `(vec ~tail)))))
-              :else (conj acc `(if ~(preserve-symbol? x)
-                                 '~x
-                                 ~x))))
+                           (reduced (conj acc `(vec ~tail
+                                                    :else (conj acc `(if ~(preserve-symbol? x)
+                                                                       '~x
+                                                                       ~x)))))))))
 
           []
           args))
-
 
 (defn replay-function
   "Returns a list to define a var with the name
@@ -406,7 +383,7 @@
   ;; There is some hairy quoting going on here so let me explain
   ;; let's say we have a function (defn* foo [x] x)
   ;; and I call it (foo 1)
-  ;; what I want from `replay-function` is to define a 
+  ;; what I want from `replay-function` is to define a
   ;; var such that when I evaluate it, it returns me a list (foo 1)
   ;; that I can evaluate.
   ;; notice that here foo is a symbol but 1 is the value of the symbol x
@@ -420,7 +397,6 @@
       `(~'def ~(concat-symbols name '>)
               `(~'~name ~~@(restructure args))))))
 
-
 (defn insert-replay-function
   [name params body]
   (if (and (seq? (first body))
@@ -428,7 +404,6 @@
     (let [[[l* bind* & b*]] body]
       (list (concat [l* bind*] (list (replay-function name params)) b*)))
     (cons (replay-function name params) body)))
-
 
 (defn define-in-variadic-forms
   ([name form]
@@ -452,15 +427,13 @@
                          (~'def ~(concat-symbols name '<) result#)
                          result#))))))
 
-
 (defn fn-form?
   "Returns true if `form` is a lambda form. anything with `(fn ...)` is a lambda form"
   [form]
   (boolean
-    (when (seq? form)
-      (some #{(first form)}
-            ['fn 'fn* 'clojure.core/fn*]))))
-
+   (when (seq? form)
+     (some #{(first form)}
+           ['fn 'fn* 'clojure.core/fn*]))))
 
 (defn replace-fn-with-*fn
   "Replaces all occurences of `fn` with `*fn`"
@@ -473,12 +446,10 @@
                          forms)]
     result))
 
-
 (declare *fn)
 
-
 (defmacro defn*
-  "Like the defn macro but injects inline defs for the arguments 
+  "Like the defn macro but injects inline defs for the arguments
    and any let bindings, or lambdas inside it."
   [name & forms]
 
@@ -494,8 +465,8 @@
         [prepost-map? forms] (if (and (some? params*)
                                       (map? (first forms))
                                       (or
-                                        (vector? (:pre (first forms)))
-                                        (vector? (:post (first forms)))))
+                                       (vector? (:pre (first forms)))
+                                       (vector? (:post (first forms)))))
                                [(first forms) (rest forms)]
                                [nil forms])
         [variadic-defs forms] (if (and (nil? params*)
@@ -529,10 +500,9 @@
       `(~'defn ~name ~@args-to-defn*
                ~@params-def
                (~'let [result#
-                       (~'do ~@body***)]
+                       (~'do ~@body**)]
                       (~'def ~(concat-symbols name '<) result#)
                       result#)))))
-
 
 (defmacro *fn
   "like fn but injects inline defs for arguments and any let bindings, or lambdas inside it."
@@ -542,7 +512,6 @@
                        ['this forms])
         exp (macroexpand-1 `(defn* ~@(cons name forms)))]
     (cons 'fn (rest exp))))
-
 
 (defmacro defmethod*
   "like defmethod but injects inline defs for arguments and any let bindings, or lambdas inside it."
@@ -566,17 +535,25 @@
       `(defmethod ~name ~dispatch-value
          ~@(map #(define-in-variadic-forms name %) forms**)))))
 
-
 (defmacro *let
   "like let but injects inline defs for bindings and any let forms, or lambdas inside it."
   [bindings & body]
   (->> body
-       (macroexpand-all &env)
+       (macroexpand-all #_&env)
        (cons bindings)
        (cons 'let)
        replace-fn-with-*fn
        (define-let-bindings)))
 
+(defmacro *plet
+  "like let but injects inline defs for bindings and any let forms, or lambdas inside it."
+  [bindings & body]
+  (->> body
+       (macroexpand-all #_&env)
+       (cons bindings)
+       (cons 'P/let)
+       replace-fn-with-*fn
+       (define-let-bindings)))
 
 #?(:clj (do (intern 'clojure.core (with-meta 'defn* (meta #'defn*)) #'defn*)
             (intern 'clojure.core (with-meta '*fn (meta #'*fn)) #'*fn)
@@ -588,3 +565,66 @@
               (intern 'cljs.core (with-meta 'defmethod* (meta #'defmethod*)) #'defmethod*)
               (intern 'cljs.core (with-meta '*let (meta #'*let)) #'*let)
               (catch Exception _))))
+
+(comment
+
+  (+ 1)
+
+  (defn* sum [a b]
+    (+ a b))
+
+  (*let [a 3
+         b (+ a 2)
+         _ 3
+         c (- b 1)]
+        c)
+
+  (clojure.core/macroexpand
+   '(*plet
+     [_ (dotenv/config #js {:path ".secrets"})
+      cfg (parse-opts usage *command-line-args* {:laxPlacement true})]))
+
+  (clojure.core/macroexpand
+   '(*let [a 3
+           b (+ a 2)
+           c (- b 1)]
+          c))
+
+  (clojure.core/macroexpand
+   '(*plet [a 3
+            b (+ a 2)
+            c (- b 1)]
+           c))
+
+  (macroexpand-all
+   '(let [a 1
+          b (+ 2 a)]
+      b))
+
+  (let* [a 3
+         _ (def a a)
+         b (+ a 2)
+         _ (def b b)
+         c (- b 1)
+         _ (def c c)])
+
+  (def sum (cljs.core/fn ([a b] (+ a b))))
+
+  (def sum
+    (cljs.core/fn
+      ([a b]
+       (def a a)
+       (def b b)
+       (let [result__920__auto__ (do)]
+         (def sum< result__920__auto__)
+         result__920__auto__))))
+
+  (sum 2 3)
+
+  (clojure.core/macroexpand
+   '(when boolean-expression
+      expression-1
+      expression-2
+      expression-3))
+
+  #_1)
